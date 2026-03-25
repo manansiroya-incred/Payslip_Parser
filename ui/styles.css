@@ -1,0 +1,163 @@
+/* Payslip Parser — Custom Streamlit CSS */
+
+/* Metric cards */
+div[data-testid="stMetric"] {
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 12px 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+div[data-testid="stMetric"] label {
+    color: #6c757d;
+    font-size: 0.85rem;
+}
+
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #212529;
+}
+
+/* Verdict cards */
+.verdict-card {
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 8px 0;
+    font-weight: 600;
+}
+
+.verdict-good {
+    background-color: #d4edda;
+    border-left: 4px solid #28a745;
+    color: #155724;
+}
+
+.verdict-warn {
+    background-color: #fff3cd;
+    border-left: 4px solid #ffc107;
+    color: #856404;
+}
+
+.verdict-bad {
+    background-color: #f8d7da;
+    border-left: 4px solid #dc3545;
+    color: #721c24;
+}
+
+/* Employee header card */
+.employee-header {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 12px;
+    padding: 24px;
+    color: white;
+    margin-bottom: 20px;
+}
+
+.employee-header h2 {
+    margin: 0 0 4px 0;
+    color: white;
+    font-size: 1.6rem;
+}
+
+.employee-header .subtitle {
+    opacity: 0.85;
+    font-size: 0.95rem;
+}
+
+.employee-header .meta {
+    margin-top: 12px;
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.employee-header .meta-item {
+    font-size: 0.85rem;
+    opacity: 0.9;
+}
+
+/* Data quality banner */
+.quality-notice {
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 12px 0;
+    font-size: 0.9rem;
+}
+
+.quality-warning {
+    background-color: #fff3cd;
+    border: 1px solid #ffc107;
+    color: #856404;
+}
+
+.quality-info {
+    background-color: #d1ecf1;
+    border: 1px solid #bee5eb;
+    color: #0c5460;
+}
+
+.quality-error {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+/* Non-standard component card */
+.non-standard-card {
+    background-color: #e8f4fd;
+    border: 1px solid #bee5eb;
+    border-radius: 8px;
+    padding: 16px;
+    margin: 8px 0;
+}
+
+/* Comparison banner */
+.comparison-banner {
+    background-color: #e2e3f1;
+    border: 1px solid #c5c7e0;
+    border-radius: 8px;
+    padding: 12px 20px;
+    text-align: center;
+    margin: 12px 0;
+}
+
+/* Sidebar styling */
+section[data-testid="stSidebar"] {
+    background-color: #fafbfc;
+}
+
+/* Tab styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: 6px 6px 0 0;
+    padding: 8px 20px;
+}
+
+/* Table highlight for outliers */
+.highlight-amber {
+    background-color: #fff3cd !important;
+}
+
+/* Loan signals table */
+.loan-signals-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.loan-signals-table th {
+    background-color: #f8f9fa;
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 2px solid #dee2e6;
+    font-weight: 600;
+}
+
+.loan-signals-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e9ecef;
+}

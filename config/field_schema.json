@@ -1,0 +1,55 @@
+{
+  "document_meta": {
+    "date_of_issue": "YYYY-MM-DD",
+    "pay_period_label": "Month YYYY",
+    "pay_period_start": "YYYY-MM-DD",
+    "pay_period_end": "YYYY-MM-DD",
+    "salary_frequency": "monthly|weekly|biweekly|daily",
+    "currency": "INR"
+  },
+  "employer": {
+    "name": "",
+    "address": "",
+    "department": ""
+  },
+  "employee": {
+    "name": "",
+    "employee_id": "",
+    "date_of_birth": "YYYY-MM-DD",
+    "address": "",
+    "job_title": "",
+    "employment_date": "YYYY-MM-DD",
+    "bank_account": ""
+  },
+  "attendance": {
+    "days_worked": null,
+    "hours_worked": null,
+    "hourly_rate": null,
+    "days_in_period": null
+  },
+  "earnings": {
+    "basic_salary": null,
+    "hra": null,
+    "lta": null,
+    "special_allowance": null,
+    "overtime": null,
+    "bonus": null,
+    "other_earnings": {},
+    "gross_salary": null
+  },
+  "deductions": {
+    "tds_income_tax": null,
+    "pf_epf": null,
+    "professional_tax": null,
+    "gratuity": null,
+    "esic": null,
+    "loan_deduction": null,
+    "other_deductions": {},
+    "total_deductions": null
+  },
+  "net_pay": {
+    "net_salary": null,
+    "ctc_mentioned": null
+  },
+  "raw_extras": {}
+}
