@@ -423,6 +423,77 @@ def _render_insights(insights: dict, version: str, currency: str) -> str:
     return "\n".join(lines)
 
 
+def _render_authenticity(authenticity: dict) -> str:
+    """Render authenticity score and flags."""
+    if not authenticity:
+        return ""
+    score = authenticity.get("score", 0)
+    label = authenticity.get("label", "Unknown")
+    lines = [_section("Authenticity Score", 3)]
+    lines.append(f"**Score: {score}/100 ({label})**\n")
+    for flag in authenticity.get("flags", []):
+        if flag.get("pass") is None:
+            continue
+        icon = "PASS" if flag["pass"] else "FLAG"
+        lines.append(f"- [{icon}] **{flag['check'].replace('_', ' ').title()}**: {flag['message']}")
+    return "\n".join(lines)
+
+
+def _render_tax_compliance_report(tax_compliance: dict, currency: str) -> str:
+    """Render tax compliance verification."""
+    if not tax_compliance:
+        return ""
+    lines = [_section("Tax Compliance Verification", 3)]
+    lines.append(f"**Verdict: {tax_compliance.get('verdict', 'N/A').replace('_', ' ').title()}**\n")
+    rng = tax_compliance.get("expected_tds_range", {})
+    rows = [
+        ("Annualised Gross", _fmt_money(tax_compliance.get("annual_gross"), currency)),
+        ("Standard Deduction", _fmt_money(tax_compliance.get("standard_deduction"), currency)),
+        ("Est. HRA Exemption", _fmt_money(tax_compliance.get("hra_exemption_estimate"), currency)),
+        ("Expected TDS Range", f"{_fmt_money(rng.get('low'), currency)} – {_fmt_money(rng.get('high'), currency)}"),
+        ("Actual Annual TDS", _fmt_money(tax_compliance.get("actual_annual_tds"), currency)),
+    ]
+    for label, val in rows:
+        lines.append(f"- **{label}:** {val}")
+    lines.append(f"\n{tax_compliance.get('verdict_detail', '')}")
+    return "\n".join(lines)
+
+
+def _render_employer_signals_report(employer_signals: dict) -> str:
+    """Render employer compliance signals."""
+    if not employer_signals:
+        return ""
+    pos = employer_signals.get("positive_count", 0)
+    total = employer_signals.get("total_assessable", 0)
+    lines = [_section("Employer Compliance Signals", 3)]
+    lines.append(f"**{pos} of {total} assessable signals positive**\n")
+    for sig in employer_signals.get("signals", []):
+        if sig.get("present") is True:
+            icon = "YES"
+        elif sig.get("present") is False:
+            icon = "NO"
+        else:
+            icon = "N/A"
+        lines.append(f"- [{icon}] **{sig['label']}** — {sig['detail']}")
+    return "\n".join(lines)
+
+
+def _render_income_projection_report(projection: dict, currency: str) -> str:
+    """Render income projection summary."""
+    if not projection:
+        return ""
+    lines = [_section("Income Trend Projection", 3)]
+    trajectory = projection.get("trajectory", "Flat")
+    arrows = {"Positive": "UP", "Flat": "FLAT", "Declining": "DOWN"}
+    lines.append(f"**Trajectory: {trajectory} ({arrows.get(trajectory, 'FLAT')})**\n")
+    lines.append(f"- Growth rate: {projection.get('monthly_growth_pct', 0) * 100:.1f}%/month")
+    lines.append(f"- Current net: {_fmt_money(projection.get('current_net'), currency)}")
+    lines.append(f"- Projected net (12 months): {_fmt_money(projection.get('projected_net_12m'), currency)}")
+    lines.append(f"- Data points: {projection.get('data_points', 0)}")
+    lines.append(f"- R-squared: {projection.get('r_squared', 0):.3f}")
+    return "\n".join(lines)
+
+
 def _render_prescription(prescription: dict) -> str:
     """Version B only — show what Gemini approved, skipped, and why."""
     if not prescription:
@@ -573,9 +644,11 @@ def _render_loan_signals(data: dict, insights: dict, consistency: dict) -> str:
 
     lines = [_section("Loan Pre-Screening Signals", 2)]
     headers = ["Signal", "Value", "Source"]
+    is_avg = data.get("_is_batch_average", False)
+    salary_src = "Batch average" if is_avg else "Extracted / estimated"
     rows = [
-        ["Monthly net take-home", _fmt_money(monthly_net, currency), "Extracted / estimated"],
-        ["Monthly gross salary", _fmt_money(monthly_gross, currency), "Extracted / estimated"],
+        ["Monthly net take-home", _fmt_money(monthly_net, currency), salary_src],
+        ["Monthly gross salary", _fmt_money(monthly_gross, currency), salary_src],
         ["Annual CTC", _fmt_money(annual_gross, currency), f"Calculated ({annual_source})"],
         ["Employer", data.get("employer", {}).get("name") or "Not specified", "Extracted"],
         ["Employment date", employment_date_str or "Not specified", "Extracted"],
@@ -600,6 +673,11 @@ def generate_report(
     prescriptions_list: list,
     consistency: dict,
     processing_time: float,
+    *,
+    authenticity_scores: list = None,
+    tax_compliance_results: list = None,
+    employer_signals_results: list = None,
+    income_projection: dict = None,
 ) -> Path:
     """
     Generate a Markdown report for the current session.
@@ -635,6 +713,15 @@ def generate_report(
         sections.append(_render_net_pay(data))
         sections.append(_render_insights(insights, version, data.get("document_meta", {}).get("currency", "INR")))
 
+        # Enhancement sections
+        currency = data.get("document_meta", {}).get("currency", "INR")
+        if authenticity_scores and i < len(authenticity_scores) and authenticity_scores[i]:
+            sections.append(_render_authenticity(authenticity_scores[i]))
+        if tax_compliance_results and i < len(tax_compliance_results) and tax_compliance_results[i]:
+            sections.append(_render_tax_compliance_report(tax_compliance_results[i], currency))
+        if employer_signals_results and i < len(employer_signals_results) and employer_signals_results[i]:
+            sections.append(_render_employer_signals_report(employer_signals_results[i]))
+
         # Version B prescription
         prescription = None
         if prescriptions_list and i < len(prescriptions_list):
@@ -656,11 +743,35 @@ def generate_report(
     batch = _render_batch_analysis(results, consistency)
     if batch:
         sections.append(batch)
+
+    # Income projection (batch, 3+ payslips)
+    if income_projection:
+        currency = results[0].get("document_meta", {}).get("currency", "INR") if results else "INR"
+        sections.append(_render_income_projection_report(income_projection, currency))
+
+    if batch or income_projection:
         sections.append("\n---")
 
-    # --- Loan signals (first payslip) ---
+    # --- Loan signals (use batch average if multiple payslips) ---
     if results and insights_list:
-        sections.append(_render_loan_signals(results[0], insights_list[0], consistency))
+        if len(results) > 1:
+            nets = [r.get("net_pay", {}).get("net_salary") for r in results if r.get("net_pay", {}).get("net_salary")]
+            grosses = [r.get("earnings", {}).get("gross_salary") for r in results if r.get("earnings", {}).get("gross_salary")]
+            avg_data = dict(results[0])
+            avg_data["net_pay"] = dict(results[0].get("net_pay", {}))
+            avg_data["earnings"] = dict(results[0].get("earnings", {}))
+            if nets:
+                avg_data["net_pay"]["net_salary"] = round(sum(nets) / len(nets), 2)
+            if grosses:
+                avg_data["earnings"]["gross_salary"] = round(sum(grosses) / len(grosses), 2)
+            from calculator.insights import compute_annual_figures, compute_take_home_ratio
+            avg_insights = {
+                "monthly_to_annual_conversion": compute_annual_figures(avg_data),
+                "take_home_ratio": compute_take_home_ratio(avg_data),
+            }
+            sections.append(_render_loan_signals(avg_data, avg_insights, consistency))
+        else:
+            sections.append(_render_loan_signals(results[0], insights_list[0], consistency))
 
     # Write file
     content = "\n".join(sections)

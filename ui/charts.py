@@ -176,10 +176,11 @@ def deductions_donut(deductions: dict, total_deductions: Optional[float] = None,
 # ---------------------------------------------------------------------------
 # Tab 2: Salary trend line chart
 # ---------------------------------------------------------------------------
-def salary_trend_line(payslips: list[dict]) -> go.Figure:
+def salary_trend_line(payslips: list[dict], projection: dict = None) -> go.Figure:
     """
     Line chart: Gross (dashed), Net (solid), Deductions (thin) over time.
     Includes reference line at average net and shaded consistency band.
+    If projection is provided, extends the Net line with a dotted projection.
     """
     months = []
     gross_vals = []
@@ -256,6 +257,21 @@ def salary_trend_line(payslips: list[dict]) -> go.Figure:
             annotation_text=f"Avg Net: ₹{avg_net:,.0f}",
             annotation_position="bottom right",
         )
+
+    # Income projection (dotted extension from last actual data point)
+    if projection and projection.get("projected_values") and months:
+        proj_labels = projection.get("projected_labels", [])
+        proj_vals = projection["projected_values"]
+        # Connect from last actual point to projection
+        proj_x = [months[-1]] + proj_labels
+        proj_y = [net_vals[-1]] + proj_vals
+        fig.add_trace(go.Scatter(
+            x=proj_x, y=proj_y,
+            mode="lines",
+            name="Net (Projected)",
+            line=dict(dash="dot", color="#28a745", width=2),
+            opacity=0.6,
+        ))
 
     fig.update_layout(
         title="Salary Trend",

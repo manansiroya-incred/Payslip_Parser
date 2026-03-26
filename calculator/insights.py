@@ -362,6 +362,88 @@ def compute_gratuity(data: dict) -> Optional[dict]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# 13. Income trend projection (batch-mode, 3+ payslips)
+# ---------------------------------------------------------------------------
+def compute_income_projection(payslips_list: list[dict]) -> Optional[dict]:
+    """Linear regression on monthly net salaries to project 12 months forward.
+
+    Requires 3+ payslips. Uses numpy.polyfit for simple linear regression.
+    Classifies trajectory: Positive (>1%/month), Flat (±1%), Declining (<-1%).
+    """
+    if not payslips_list or len(payslips_list) < 3:
+        return None
+
+    import numpy as np
+
+    net_values = []
+    month_labels = []
+    for p in payslips_list:
+        net = _safe_get(p, "net_pay", "net_salary")
+        if net is None or net <= 0:
+            return None
+        net_values.append(net)
+        label = (
+            _safe_get(p, "document_meta", "pay_period_label")
+            or _safe_get(p, "document_meta", "pay_period_start")
+            or _safe_get(p, "_source_file")
+            or f"Month {len(net_values)}"
+        )
+        month_labels.append(label)
+
+    if len(net_values) < 3:
+        return None
+
+    x = np.arange(len(net_values), dtype=float)
+    y = np.array(net_values, dtype=float)
+
+    # Simple linear regression: y = a + b*x
+    coeffs = np.polyfit(x, y, 1)  # coeffs[0]=slope, coeffs[1]=intercept
+    slope = coeffs[0]
+
+    current_net = net_values[-1]
+    monthly_growth_pct = slope / current_net if current_net > 0 else 0
+
+    # Classify trajectory
+    if monthly_growth_pct > 0.01:
+        trajectory = "Positive"
+    elif monthly_growth_pct < -0.01:
+        trajectory = "Declining"
+    else:
+        trajectory = "Flat"
+
+    # Project 12 months forward from last data point
+    last_idx = len(net_values) - 1
+    projected_values = []
+    projected_labels = []
+    for m in range(1, 13):
+        proj_val = max(0, coeffs[1] + coeffs[0] * (last_idx + m))
+        projected_values.append(round(proj_val, 2))
+        projected_labels.append(f"+{m}m (Proj)")
+
+    projected_12m = projected_values[-1] if projected_values else current_net
+
+    # R-squared for confidence
+    y_pred = np.polyval(coeffs, x)
+    ss_res = np.sum((y - y_pred) ** 2)
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+    return {
+        "trajectory": trajectory,
+        "monthly_growth_rate": round(slope, 2),
+        "monthly_growth_pct": round(monthly_growth_pct, 4),
+        "current_net": current_net,
+        "projected_net_12m": round(projected_12m, 2),
+        "data_points": len(net_values),
+        "net_values": net_values,
+        "projected_values": projected_values,
+        "months_labels": month_labels,
+        "projected_labels": projected_labels,
+        "r_squared": round(r_squared, 4),
+    }
+
+
 # ===========================================================================
 # HARDCODED_INSIGHTS — THE SINGLE SOURCE OF TRUTH
 # ===========================================================================
@@ -409,6 +491,12 @@ def run_all_insights(data: dict) -> dict:
     return run_insights(data, keys)
 
 
-def run_batch_insights(payslips_list: list[dict]) -> Optional[dict]:
-    """Run batch-only insights (consistency analysis)."""
-    return compute_consistency(payslips_list)
+def run_batch_insights(payslips_list: list[dict]) -> dict:
+    """Run batch-only insights: consistency + income projection.
+
+    Returns dict with keys 'consistency' and 'income_projection'.
+    """
+    return {
+        "consistency": compute_consistency(payslips_list),
+        "income_projection": compute_income_projection(payslips_list),
+    }

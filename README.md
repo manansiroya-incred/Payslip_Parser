@@ -1,6 +1,6 @@
 # Payslip Parser & Document Analyser Agent
 
-A Streamlit-based payslip analysis tool built for **InCred Finance** that extracts structured data from Indian and international payslips using Gemini Vision, computes financial insights via Python, and presents results in an interactive 4-tab UI. Supports two processing versions (A and B) for comparison, batch analysis of up to 3 months, loan pre-screening with EMI calculation, and per-session Markdown report generation.
+An AI-powered payslip analysis tool built for **InCred Finance** that extracts salary data from payslip documents using Google Gemini Vision, computes financial insights through a Python calculation engine, and presents results in an interactive Streamlit dashboard with fraud detection, tax compliance verification, employer compliance profiling, and loan pre-screening capabilities.
 
 ---
 
@@ -21,6 +21,7 @@ A Streamlit-based payslip analysis tool built for **InCred Finance** that extrac
 - [Charts](#charts)
 - [Report Generation](#report-generation)
 - [Indian Number Formatting](#indian-number-formatting)
+- [Enhancements](#enhancements)
 - [Design Decisions](#design-decisions)
 - [Configuration](#configuration)
 - [Future Enhancements](#future-enhancements)
@@ -29,13 +30,17 @@ A Streamlit-based payslip analysis tool built for **InCred Finance** that extrac
 
 ## Features
 
-- **Multi-format support** — PDF, JPG, PNG payslips sent as raw bytes to Gemini Vision (no PDF-to-image conversion)
-- **Two processing versions** — Version A (single Gemini call) vs Version B (two calls + Python calculation) for accuracy comparison
-- **12 hardcoded insight functions** — Pure Python calculations for annualisation, take-home ratio, TDS rate, PF ratio, deduction breakdown, salary consistency, hourly normalisation, overtime analysis, HRA/LTA ratios, professional tax, and gratuity accrual
-- **Batch mode** — Upload 2-3 payslips for month-on-month trend analysis with salary consistency scoring
-- **Loan pre-screening** — EMI calculation, FOIR affordability check, and AI-generated eligibility commentary
-- **Session reports** — Markdown reports saved to `data/sessions/` after each analysis run for version comparison
-- **Indian number formatting** — Correct comma placement for INR amounts (e.g. 11,16,000 instead of 1,116,000)
+- **Multi-format extraction** — PDF, JPG, PNG payslips sent as raw bytes to Gemini Vision (no OCR or PDF conversion)
+- **Two processing versions** — Version A (single Gemini call) vs Version B (two calls + Python calculation) with side-by-side comparison
+- **13 insight functions** — Pure Python calculations covering annualisation, take-home ratio, TDS rate, PF ratio, deduction breakdown, salary consistency, hourly normalisation, overtime, HRA/LTA ratios, professional tax, gratuity accrual, and income projection
+- **Payslip authenticity scoring** — 7 automated checks (arithmetic consistency, PF compliance, TDS verification, round number detection, professional tax) producing a 0-100 fraud risk score
+- **Tax compliance verification** — Indian FY 2025-26 new regime slab computation with section 87A rebate, expected vs actual TDS comparison as a range
+- **Employer compliance signals** — 7 signals derived from payslip data (EPFO registration, state tax compliance, PF computation accuracy, employment tenure, payroll consistency)
+- **Batch mode** — Upload 2-3 payslips for trend analysis, consistency scoring, and income projection with trajectory classification
+- **Loan pre-screening** — Loan type selector (Personal 14% / Education 11%), EMI calculation, 4-tier FOIR assessment, AI-generated eligibility commentary
+- **Professional PDF export** — One-page credit document for loan files generated via ReportLab
+- **Session reports** — Auto-generated Markdown reports with full extraction, insights, verification results, and batch analysis
+- **Indian number formatting** — Correct lakh/crore comma placement (11,16,000 not 1,116,000)
 - **Currency-aware** — Auto-detects USD, GBP, EUR, JPY from document context; defaults to INR for Indian payslips
 
 ---
@@ -66,14 +71,20 @@ A Streamlit-based payslip analysis tool built for **InCred Finance** that extrac
                 |                                            |
          +------+------+                          +----------+----------+
          |  Normaliser |                          | Python Calculator   |
-         | (normaliser)|                          | (12 insight funcs)  |
+         | (normaliser)|                          | (13 insight funcs)  |
          +------+------+                          +----------+----------+
                 |                                            |
                 +--------------------+----------------------+
                                      |
                           +----------+----------+
+                          | Verification Engine |
+                          | (authenticity, tax, |
+                          |  employer signals)  |
+                          +----------+----------+
+                                     |
+                          +----------+----------+
                           |   4-Tab UI Render   |
-                          |  + Report Logger    |
+                          |  + Report + PDF     |
                           +---------------------+
 ```
 
@@ -98,12 +109,14 @@ Payslip_Parser/
 |
 +-- calculator/
 |   +-- __init__.py
-|   +-- insights.py                 # 12 pure functions + HARDCODED_INSIGHTS map
+|   +-- insights.py                 # 13 pure functions + HARDCODED_INSIGHTS map
+|   +-- verification.py             # Authenticity scoring, tax compliance, employer signals
 |
 +-- ui/
 |   +-- __init__.py
-|   +-- components.py               # Streamlit rendering functions
-|   +-- charts.py                   # 3 Plotly chart functions
+|   +-- components.py               # Streamlit rendering functions (15+ components)
+|   +-- charts.py                   # 3 Plotly charts (stacked bar, donut, trend+projection)
+|   +-- pdf_export.py               # ReportLab PDF generation for loan files
 |   +-- styles.css                  # Custom CSS (metric cards, verdict badges, etc.)
 |
 +-- config/
@@ -151,9 +164,10 @@ streamlit run app.py
 | `python-dotenv>=1.0.0` | Environment variable loading |
 | `plotly>=5.18.0` | Interactive charts |
 | `Pillow>=10.0.0` | Image handling |
-| `numpy>=1.26.0` | Statistical calculations (consistency CV) |
+| `numpy>=1.26.0` | Statistical calculations (consistency CV, income projection regression) |
 | `python-dateutil>=2.9.0` | Robust date parsing |
 | `pydantic>=2.0.0` | Available for structured validation |
+| `reportlab>=4.0.0` | PDF loan file generation |
 
 > **Important SDK note:** This project uses `google-genai` (`from google import genai`), not the deprecated `google-generativeai` package. The import patterns and API surface are different.
 
@@ -332,7 +346,7 @@ All non-standard earnings/deductions are preserved in open dicts — no data is 
 
 ## Insight Calculation Engine
 
-The calculator (`calculator/insights.py`) contains 12 pure functions registered in the `HARDCODED_INSIGHTS` map — the single source of truth for what Python can compute.
+The calculator (`calculator/insights.py`) contains 13 pure functions — 12 registered in the `HARDCODED_INSIGHTS` map (the single source of truth for what Python can compute) plus `compute_income_projection` for batch analysis.
 
 ### Functions
 
@@ -350,6 +364,7 @@ The calculator (`calculator/insights.py`) contains 12 pure functions registered 
 | 10 | `lta_as_pct_of_gross` | `compute_lta_ratio` | lta, gross_salary | lta_amount, lta_pct_of_gross |
 | 11 | `professional_tax_check` | `compute_prof_tax` | professional_tax | professional_tax_monthly, professional_tax_annual |
 | 12 | `gratuity_accrual_estimate` | `compute_gratuity` | basic_salary, employment_date (optional) | gratuity_per_year, gratuity_monthly_accrual, tenure_years, disclaimer |
+| 13 | *(batch)* | `compute_income_projection` | 3+ payslips | trajectory, monthly_growth_rate, projected_net_12m, projected_values, r_squared |
 
 ### Annualisation Multipliers (Conservative for Lending)
 
@@ -411,9 +426,12 @@ The prescriber (`extractor/gemini_prescriber.py`) is the decision layer unique t
 |---------|-----------|-------------|
 | Employee Header | Name, title, employer, pay period, frequency | Extracted data |
 | Salary Summary | 4 metric cards + narrative sentence | `monthly_to_annual_conversion`, `take_home_ratio` |
+| **Authenticity Score** | Expandable 0-100 score card with 7-check breakdown | `calculator/verification.py` |
 | Earnings Breakdown | Stacked horizontal bar + table | Extracted earnings |
 | Deductions Analysis | Donut chart + table + TDS/PF commentary | Extracted deductions + `effective_tds_rate`, `pf_as_pct_of_basic` |
+| **Tax Compliance** | Expected TDS range vs actual, slab breakdown, verdict | `calculator/verification.py` (FY 2025-26 slabs) |
 | Employment Profile | Two-column fact sheet | Extracted + `gratuity_accrual_estimate` |
+| **Employer Signals** | 7-signal compliance checklist with positive/missing/neutral indicators | `calculator/verification.py` |
 | Non-Standard Components | Gemini-computed extras (Version B) | `gemini_computed_insights` |
 | Data Quality Notice | Missing/low-confidence warnings | `_confidence` (filtered to non-null fields only) |
 
@@ -421,18 +439,20 @@ The prescriber (`extractor/gemini_prescriber.py`) is the decision layer unique t
 
 | Section | Component |
 |---------|-----------|
-| Salary Trend | 3-line chart (Gross dashed, Net solid, Deductions thin) + consistency band |
+| Salary Trend | 3-line chart (Gross dashed, Net solid, Deductions thin) + consistency band + **dotted projection line** (3+ payslips) |
 | Consistency Verdict | Green/amber/red card with CV % |
+| **Income Projection** | Trajectory (Positive/Flat/Declining), growth rate, projected net at 12 months (3+ payslips only) |
 | Comparison Table | Gross/Net/TDS/PF/Total/Take-home% per month + average row |
 
 ### Tab 3: Loan Signals
 
 | Section | Component |
 |---------|-----------|
-| Signals Table | 9 lending signals (net, gross, CTC, employer, tenure, consistency, frequency, PF, YTD) |
-| Loan Parameters | Inputs for amount, tenure, interest rate |
-| EMI Calculation | Monthly EMI, total interest, total payable |
-| Affordability Check | FOIR assessment (40% threshold: green/amber/red) |
+| Signals Table | 9 lending signals (**batch average** for net/gross when multiple payslips uploaded) |
+| **Loan Type Selector** | Personal Loan (14% default) / Education Loan (11%) / Custom |
+| Loan Parameters | Inputs for amount, tenure (max 60 PL / 84 EL), interest rate |
+| EMI Calculation | Monthly EMI, total interest, total payable, loan-to-salary ratio |
+| **4-Tier Affordability** | Comfortable (<30%), Manageable (30-45%), Stretched (45-55%), Exceeds Limit (>55%) |
 | Eligibility Commentary | AI-generated 3-5 sentence assessment (Gemini, temp=0.3) |
 
 ### Tab 4: Raw Data
@@ -464,6 +484,7 @@ Three Plotly chart functions in `ui/charts.py`:
 - Three series: Gross (dashed), Net (solid, prominent), Deductions (thin)
 - Consistency band: shaded +-5% around average net
 - Reference line: dotted gray at average net
+- **Income projection**: When 3+ payslips are provided, a dotted green extension line shows the projected net salary for 12 months forward based on linear regression
 
 ---
 
@@ -485,10 +506,17 @@ After each analysis run, `reporter.py` generates a Markdown file in `data/sessio
    - Deductions table with % of gross
    - Net pay
    - Computed insights (annualised figures, ratios, breakdowns)
+   - **Authenticity score** with 7-check breakdown
+   - **Tax compliance verification** with slab details and expected TDS range
+   - **Employer compliance signals** (7 signals)
    - Prescription details (Version B: approved/skipped with reasons)
    - Low-confidence fields (only non-null values)
-4. **Batch analysis** (if multiple payslips) — comparison table + consistency verdict
-5. **Loan signals** — pre-screening values table
+4. **Batch analysis** (if multiple payslips) — comparison table + consistency verdict + **income projection**
+5. **Loan signals** — pre-screening values table (uses **batch averages** when multiple payslips uploaded)
+
+### PDF Loan File (on-demand)
+
+A professional one-page credit document generated via ReportLab, downloadable from the sidebar. Contains employee snapshot, key metrics, earnings/deductions tables, authenticity score, tax compliance verdict, employer signals, affordability summary (if loan params set), and a disclaimer footer. Includes the processing version label.
 
 Reports use Indian comma formatting for INR amounts and are designed for side-by-side Version A vs B comparison via file diff.
 
@@ -508,6 +536,93 @@ The `_fmt_indian()` function handles this. Non-INR currencies (USD, GBP, EUR) us
 
 ---
 
+## Enhancements
+
+Six production-grade enhancements built on top of the core extraction and calculation architecture:
+
+### Enhancement 1 — Payslip Authenticity Signals
+
+Checks internal mathematical and compliance consistency. Produces a 0-100 score.
+
+| Check | What it verifies | Penalty |
+|-------|-----------------|---------|
+| Net arithmetic | `net = gross - deductions` (+-5 tolerance) | -40 (category) |
+| Deductions sum | `total_deductions = sum of components` (+-5) | -40 (category) |
+| Earnings sum | `gross = sum of components` (+-5) | -40 (category) |
+| PF compliance | 3-tier: standard (12%), non-standard (wage ceiling ₹1,800), anomalous | 0 / 0 / -20 |
+| TDS consistency | Actual TDS within 60-200% of expected (FY 2025-26 slabs) | -15 |
+| Round numbers | Round totals with non-round components | -10 |
+| Professional tax | PT <= ₹300/month | -15 |
+
+Arithmetic checks are a **category** — deduct -40 once if any of the 3 fail, not -40 per check. Labels: Strong (>=80), Moderate (50-79), Weak (25-49), Suspicious (<25).
+
+The PF check uses three-tier logic to avoid false positives: ₹500-₹1,800 on basic > ₹15,000 is classified as "non-standard" (legitimate wage ceiling) with 0 penalty.
+
+### Enhancement 2 — Salary-to-Loan Contextualisation
+
+Extends the existing Tab 3 with:
+- **Loan type selector**: Personal Loan (14% default rate), Education Loan (11%), or Custom
+- **4-tier FOIR**: Comfortable (<30%), Manageable (30-45%), Stretched (45-55%), Exceeds Limit (>55%)
+- **Loan-to-salary ratio**: Shows how many times annual salary the loan represents
+- **Batch averaging**: When multiple payslips are uploaded, signals use average monthly net/gross
+
+### Enhancement 3 — Income Trend Projection
+
+When 3+ payslips are uploaded:
+- Linear regression (`numpy.polyfit`) on monthly net salaries
+- Classifies trajectory: **Positive** (>1%/month), **Flat** (+-1%), **Declining** (<-1%)
+- Projects net salary 12 months forward
+- Dotted projection line added to the salary trend chart
+- R-squared value indicates fit confidence
+
+### Enhancement 4 — Tax Compliance Verification
+
+Verifies TDS against Indian FY 2025-26 new regime slabs (Union Budget 2025):
+
+| Taxable Income | Rate |
+|---------------|------|
+| Up to ₹4L | 0% |
+| ₹4L - ₹8L | 5% |
+| ₹8L - ₹12L | 10% |
+| ₹12L - ₹16L | 15% |
+| ₹16L - ₹20L | 20% |
+| ₹20L - ₹24L | 25% |
+| Above ₹24L | 30% |
+
+- Standard deduction: ₹75,000
+- Section 87A rebate: No tax if taxable income <= ₹12,00,000 (applied to low end of range only)
+- HRA exemption estimated conservatively: `min(actual HRA, 40% of basic)`
+- Expected TDS always shown as a **range** (with/without HRA, with/without rebate)
+- 4% Health & Education Cess applied
+
+### Enhancement 5 — Employer Compliance Signals
+
+7 signals derived entirely from payslip data (no external API calls):
+
+| Signal | Derived From | Notes |
+|--------|-------------|-------|
+| EPFO Registered | PF deduction present | Confirms formal registration |
+| State Tax Compliant | Professional tax present | Employer files state returns |
+| Small-Medium Employer | ESIC present | <500 employees (ESIC threshold) |
+| Established Employer | Employee tenure >= 5 years | Inferred from employment date, not gratuity deduction |
+| Correct PF Computation | PF = 12% of basic +-5% | Compliant payroll |
+| Payroll Software Used | Consistent formatting (batch) | Requires 2+ payslips |
+| Salary Paid On Time | Consistent issue dates (batch) | Requires 2+ payslips |
+
+### Enhancement 6 — Loan File PDF Export
+
+One-page professional credit document via ReportLab, downloadable from the sidebar:
+- Header with InCred Finance branding, date, and processing version
+- Employee snapshot and key metrics
+- Earnings and deductions summary table
+- Authenticity score with flag breakdown
+- Tax compliance verdict
+- Employer compliance signals
+- Loan affordability summary (if parameters set)
+- Disclaimer footer
+
+---
+
 ## Design Decisions
 
 | Decision | Rationale |
@@ -520,6 +635,12 @@ The `_fmt_indian()` function handles this. Non-INR currencies (USD, GBP, EUR) us
 | **Force fundamental insights** | `monthly_to_annual_conversion` and `take_home_ratio` always run in both versions regardless of prescription. |
 | **Confidence filtering** | Low-confidence warnings only shown for fields with non-null values. Null + "low" = confident the field wasn't there, not hard to read. |
 | **Gratuity disclaimer** | Gratuity shown as theoretical accrual with explicit note when tenure < 5 years (Payment of Gratuity Act, 1972 requirement). |
+| **Single verification module** | `calculator/verification.py` serves authenticity (E1), tax compliance (E4), and employer signals (E5) with a shared tax slab engine. TDS computation is never duplicated. |
+| **Tax range, never a point estimate** | Expected TDS always computed as a range (with/without HRA, with/without 87A rebate) because individual tax situations vary. |
+| **PF 3-tier logic** | Standard (12%), non-standard (wage ceiling), anomalous. Prevents false positives on legitimate payslips where PF is capped at ₹1,800. |
+| **Established employer via tenure** | Uses employment date (>= 5 years) instead of checking for gratuity deduction, which rarely appears as a line item on payslips. |
+| **Batch averaging for loan signals** | Multiple payslips → average monthly net/gross used for lending signals. More reliable than any single month. |
+| **Chronological sorting** | Payslips sorted by `pay_period_start`, with fallback to parsed `pay_period_label` ("February 2026" → "2026-02"), then `date_of_issue`. |
 
 ---
 
@@ -547,10 +668,10 @@ All calls use `gemini-2.5-flash` by default. The model can be changed via the `m
 
 ## Future Enhancements
 
-- [ ] Test set evaluator framework with ground truth comparison
+- [ ] Test set evaluator framework with ground truth comparison and 95% accuracy target
 - [ ] Multi-page payslip support (payslips spanning multiple pages)
-- [ ] Historical trend storage across sessions
-- [ ] PDF report export (in addition to Markdown)
+- [ ] Historical trend storage across sessions (persistent database)
 - [ ] Employer database for cross-referencing company details
 - [ ] Enhanced batch mode with YTD reconciliation
-- [ ] Automated version comparison dashboard
+- [ ] Old vs new tax regime comparison in tax compliance section
+- [ ] Multi-language payslip support (Hindi, regional languages)

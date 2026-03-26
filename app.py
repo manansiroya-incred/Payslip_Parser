@@ -23,16 +23,25 @@ from extractor.gemini_prescriber import prescribe_insights
 from extractor.gemini_version_a import extract_and_analyse_v1
 from extractor.normaliser import normalise_extraction
 from calculator.insights import run_insights, run_all_insights, run_batch_insights
+from calculator.verification import (
+    compute_authenticity_score,
+    compute_tax_compliance,
+    compute_employer_signals,
+)
 from ui.components import (
     render_employee_header,
     render_salary_summary,
+    render_authenticity_card,
     render_earnings_breakdown,
     render_deductions_analysis,
     render_employment_profile,
     render_non_standard_components,
     render_data_quality_notice,
+    render_tax_compliance,
+    render_employer_signals,
     render_consistency_verdict,
     render_month_comparison_table,
+    render_income_projection,
     render_loan_signals,
     render_raw_data,
     render_version_comparison,
@@ -86,6 +95,11 @@ def _init_session_state():
         # Loan commentary
         "loan_commentary": None,
         "last_report_path": None,
+        # Enhancement data
+        "authenticity_scores": None,
+        "tax_compliance_results": None,
+        "employer_signals_results": None,
+        "income_projection": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -95,19 +109,48 @@ def _init_session_state():
 # ---------------------------------------------------------------------------
 # Batch sorting
 # ---------------------------------------------------------------------------
+def _parse_date_for_sort(date_str: str) -> str:
+    """Try to parse a date/label into a sortable YYYY-MM-DD or YYYY-MM string."""
+    if not date_str:
+        return ""
+    # Already ISO format (YYYY-MM-DD or YYYY-MM)
+    if len(date_str) >= 7 and date_str[:4].isdigit():
+        return date_str
+    # Try parsing "Month Year" labels like "February 2026"
+    from datetime import datetime
+    for fmt in ("%B %Y", "%b %Y", "%B-%Y", "%b-%Y", "%m/%Y", "%m-%Y"):
+        try:
+            return datetime.strptime(date_str.strip(), fmt).strftime("%Y-%m")
+        except ValueError:
+            continue
+    # Try dateutil as last resort
+    try:
+        from dateutil import parser as dateutil_parser
+        return dateutil_parser.parse(date_str, dayfirst=True).strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        pass
+    return date_str  # fall back to original string
+
+
 def _sort_payslips(normalised_list: list, insights_list: list, prescriptions_list: list = None):
     """Sort payslips chronologically by pay_period_start, with fallbacks."""
     def sort_key(item):
         data = item[0]
-        # Primary: pay_period_start
-        pp_start = data.get("document_meta", {}).get("pay_period_start")
+        doc = data.get("document_meta", {})
+        # Primary: pay_period_start (already ISO)
+        pp_start = doc.get("pay_period_start")
         if pp_start:
             return pp_start
-        # Secondary: pay_period_label (try to extract sortable string)
-        pp_label = data.get("document_meta", {}).get("pay_period_label", "")
-        if pp_label:
-            return pp_label
-        # Tertiary: source file name
+        # Secondary: parse pay_period_label into sortable date
+        pp_label = doc.get("pay_period_label", "")
+        parsed = _parse_date_for_sort(pp_label)
+        if parsed:
+            return parsed
+        # Tertiary: date_of_issue
+        doi = doc.get("date_of_issue")
+        if doi:
+            return doi
+        # Last resort: source file name
         return data.get("_source_file", "zzz")
 
     if prescriptions_list:
@@ -201,10 +244,21 @@ def _run_analysis(uploaded_files):
         normalised_list, insights_list, prescriptions_list
     )
 
-    # Batch consistency
+    # Batch insights (consistency + income projection)
     consistency = None
+    income_projection = None
     if len(normalised_list) > 1:
-        consistency = run_batch_insights(normalised_list)
+        batch = run_batch_insights(normalised_list)
+        consistency = batch.get("consistency") if batch else None
+        income_projection = batch.get("income_projection") if batch else None
+
+    # Verification computations (E1: authenticity, E4: tax compliance, E5: employer signals)
+    authenticity_scores = [compute_authenticity_score(d) for d in normalised_list]
+    tax_compliance_results = [compute_tax_compliance(d) for d in normalised_list]
+    employer_signals_results = [
+        compute_employer_signals(d, normalised_list if len(normalised_list) > 1 else None)
+        for d in normalised_list
+    ]
 
     # Store in session state
     st.session_state["results"] = normalised_list
@@ -213,6 +267,10 @@ def _run_analysis(uploaded_files):
     st.session_state["consistency"] = consistency
     st.session_state["processing_time"] = elapsed
     st.session_state["loan_commentary"] = None  # reset
+    st.session_state["authenticity_scores"] = authenticity_scores
+    st.session_state["tax_compliance_results"] = tax_compliance_results
+    st.session_state["employer_signals_results"] = employer_signals_results
+    st.session_state["income_projection"] = income_projection
 
     # Store for version comparison
     key_prefix = "a" if version == "A" else "b"
@@ -229,6 +287,10 @@ def _run_analysis(uploaded_files):
             prescriptions_list=prescriptions_list,
             consistency=consistency,
             processing_time=elapsed,
+            authenticity_scores=authenticity_scores,
+            tax_compliance_results=tax_compliance_results,
+            employer_signals_results=employer_signals_results,
+            income_projection=income_projection,
         )
         st.session_state["last_report_path"] = str(report_path)
     except Exception as e:
@@ -377,6 +439,8 @@ def _render_sidebar():
                     "processing_time", "loan_commentary", "last_report_path",
                     "results_a", "insights_a", "time_a",
                     "results_b", "insights_b", "time_b",
+                    "authenticity_scores", "tax_compliance_results",
+                    "employer_signals_results", "income_projection",
                 ]:
                     st.session_state[key] = None
                 st.rerun()
@@ -401,6 +465,35 @@ def _render_sidebar():
                     use_container_width=True,
                 )
                 st.caption(f"Saved: `{Path(report_path).name}`")
+            except Exception:
+                pass
+
+        # PDF loan file export (E6)
+        if st.session_state.get("results"):
+            from ui.pdf_export import generate_loan_file_pdf
+            try:
+                pdf_buf = generate_loan_file_pdf(
+                    data=st.session_state["results"][0],
+                    insights=st.session_state["insights"][0] if st.session_state.get("insights") else {},
+                    version=st.session_state.get("version", "B"),
+                    authenticity=(st.session_state.get("authenticity_scores") or [None])[0],
+                    tax_compliance=(st.session_state.get("tax_compliance_results") or [None])[0],
+                    employer_signals=(st.session_state.get("employer_signals_results") or [None])[0],
+                    loan_params={
+                        "loan_amount": st.session_state.get("loan_amount"),
+                        "loan_tenure": st.session_state.get("loan_tenure"),
+                        "loan_rate": st.session_state.get("loan_rate"),
+                        "loan_type": st.session_state.get("loan_type", "Personal Loan"),
+                    },
+                    consistency=st.session_state.get("consistency"),
+                )
+                st.download_button(
+                    label="⬇ Download Loan File (PDF)",
+                    data=pdf_buf,
+                    file_name="loan_file.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
             except Exception:
                 pass
 
@@ -448,6 +541,11 @@ def _render_tab1():
     st.markdown("### Salary Summary")
     render_salary_summary(data, insights)
 
+    # Section 2.5: Authenticity score (E1)
+    auth_scores = st.session_state.get("authenticity_scores") or []
+    if auth_scores and selected_idx < len(auth_scores):
+        render_authenticity_card(auth_scores[selected_idx])
+
     # Section 3: Earnings breakdown
     st.markdown("### Earnings Breakdown")
     render_earnings_breakdown(data)
@@ -456,9 +554,22 @@ def _render_tab1():
     st.markdown("### Deductions Analysis")
     render_deductions_analysis(data, insights)
 
+    # Section 4.5: Tax compliance verification (E4)
+    tc_results = st.session_state.get("tax_compliance_results") or []
+    if tc_results and selected_idx < len(tc_results) and tc_results[selected_idx]:
+        st.markdown("### Tax Compliance Verification")
+        from ui.components import _get_currency_symbol
+        render_tax_compliance(tc_results[selected_idx], _get_currency_symbol(data))
+
     # Section 5: Employment profile
     st.markdown("### Employment Profile")
     render_employment_profile(data, insights)
+
+    # Section 5.5: Employer compliance signals (E5)
+    emp_sigs = st.session_state.get("employer_signals_results") or []
+    if emp_sigs and selected_idx < len(emp_sigs) and emp_sigs[selected_idx]:
+        st.markdown("### Employer Compliance Signals")
+        render_employer_signals(emp_sigs[selected_idx])
 
     # Section 6: Non-standard components
     gemini_computed = insights.get("gemini_computed", {})
@@ -487,14 +598,23 @@ def _render_tab2():
         st.info("Upload 2 or more payslips to enable trend analysis.")
         return
 
-    # Section 1: Salary trend chart
+    # Section 1: Salary trend chart (with optional projection)
+    projection = st.session_state.get("income_projection")
     st.markdown("### Salary Trend")
-    fig = salary_trend_line(results)
+    fig = salary_trend_line(results, projection=projection)
     st.plotly_chart(fig, use_container_width=True)
 
     # Section 2: Consistency verdict
     if consistency:
         render_consistency_verdict(consistency)
+
+    # Section 2.5: Income projection (E3) — requires 3+ payslips
+    if projection:
+        st.markdown("### Income Trend Projection")
+        from ui.components import _get_currency_symbol
+        render_income_projection(projection, _get_currency_symbol(results[0]))
+    elif len(results) == 2:
+        st.caption("Upload a third payslip to enable income trend projection.")
 
     # Section 3: Comparison table
     st.markdown("### Month-by-Month Comparison")
@@ -510,9 +630,34 @@ def _render_tab3():
     if not results:
         return
 
-    # Use first payslip (or average for batch)
-    data = results[0]
-    insights = insights_list[0] if insights_list else {}
+    # For batch: build a synthetic "average" data dict for lending signals.
+    # For single payslip, use it directly.
+    if len(results) > 1:
+        # Compute average monthly figures across all payslips
+        nets = [r.get("net_pay", {}).get("net_salary") for r in results if r.get("net_pay", {}).get("net_salary")]
+        grosses = [r.get("earnings", {}).get("gross_salary") for r in results if r.get("earnings", {}).get("gross_salary")]
+        avg_net = sum(nets) / len(nets) if nets else None
+        avg_gross = sum(grosses) / len(grosses) if grosses else None
+
+        # Build average data from first payslip as base, override salary figures
+        data = dict(results[0])
+        data["net_pay"] = dict(results[0].get("net_pay", {}))
+        data["earnings"] = dict(results[0].get("earnings", {}))
+        if avg_net is not None:
+            data["net_pay"]["net_salary"] = round(avg_net, 2)
+        if avg_gross is not None:
+            data["earnings"]["gross_salary"] = round(avg_gross, 2)
+        # Flag that these are averages (used by render_loan_signals for source label)
+        data["_is_batch_average"] = True
+
+        # Build average insights — recompute annual from average monthly
+        from calculator.insights import compute_annual_figures, compute_take_home_ratio
+        insights = {}
+        insights["monthly_to_annual_conversion"] = compute_annual_figures(data)
+        insights["take_home_ratio"] = compute_take_home_ratio(data)
+    else:
+        data = results[0]
+        insights = insights_list[0] if insights_list else {}
 
     # Render signals + loan params (this includes the number inputs)
     render_loan_signals(data, insights, consistency, st.session_state.get("loan_commentary", ""))

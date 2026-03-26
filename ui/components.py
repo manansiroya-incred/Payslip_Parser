@@ -661,9 +661,10 @@ def render_loan_signals(data: dict, insights: dict, consistency: Optional[dict],
     # Use monthly net from annual_data (handles frequency conversion)
     monthly_net = annual_data.get("monthly_net") or data.get("net_pay", {}).get("net_salary")
 
+    salary_source = "Batch average" if data.get("_is_batch_average") else "Extracted / estimated"
     signals = [
-        ("Monthly net take-home", _fmt_currency(monthly_net, cs), "Extracted / estimated"),
-        ("Monthly gross salary", _fmt_currency(annual_data.get("monthly_gross") or data.get("earnings", {}).get("gross_salary"), cs), "Extracted / estimated"),
+        ("Monthly net take-home", _fmt_currency(monthly_net, cs), salary_source),
+        ("Monthly gross salary", _fmt_currency(annual_data.get("monthly_gross") or data.get("earnings", {}).get("gross_salary"), cs), salary_source),
         ("Annual CTC", _fmt_currency(annual_data.get("annual_gross"), cs), f"Calculated ({annual_data.get('assumption', 'gross x 12')})"),
         ("Employer name", data.get("employer", {}).get("name") or "Not specified", "Extracted"),
         ("Employment date", employment_date_str or "Not specified", "Extracted"),
@@ -684,8 +685,12 @@ def render_loan_signals(data: dict, insights: dict, consistency: Optional[dict],
     df = pd.DataFrame(signals, columns=["Signal", "Value", "Source"])
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # --- Loan Parameters & EMI Calculation ---
+    # --- Loan Type & Parameters ---
     st.markdown("### Loan Parameters")
+    _LOAN_TYPES = {"Personal Loan": 14.0, "Education Loan": 11.0, "Custom": None}
+    loan_type = st.selectbox("Loan type", list(_LOAN_TYPES.keys()), key="loan_type")
+    default_rate = _LOAN_TYPES.get(loan_type) or 12.0
+
     col1, col2, col3 = st.columns(3)
     with col1:
         loan_amount = st.number_input(
@@ -694,15 +699,16 @@ def render_loan_signals(data: dict, insights: dict, consistency: Optional[dict],
             key="loan_amount",
         )
     with col2:
+        max_tenure = 84 if loan_type == "Education Loan" else 60
         tenure_months = st.number_input(
             "Tenure (months)",
-            min_value=1, max_value=360, value=60, step=6,
+            min_value=1, max_value=max_tenure, value=min(60, max_tenure), step=6,
             key="loan_tenure",
         )
     with col3:
         interest_rate = st.number_input(
             "Annual interest rate (%)",
-            min_value=0.0, max_value=50.0, value=12.0, step=0.5,
+            min_value=0.0, max_value=50.0, value=default_rate, step=0.5,
             key="loan_rate",
         )
 
@@ -724,32 +730,199 @@ def render_loan_signals(data: dict, insights: dict, consistency: Optional[dict],
         with col_emi3:
             st.metric("Total Payable", _fmt_currency(total_payable, cs))
 
-        # Affordability check against monthly net income
+        # Loan-to-salary context
+        annual_gross = annual_data.get("annual_gross")
+        if annual_gross and annual_gross > 0:
+            st.caption(f"Loan is {loan_amount / annual_gross:.1f}x annual salary")
+
+        # 4-tier affordability check
         if monthly_net and monthly_net > 0:
             emi_to_income = emi / monthly_net
             remaining = monthly_net - emi
+            pct = f"{emi_to_income * 100:.1f}%"
 
-            if emi_to_income <= 0.40:
+            if emi_to_income <= 0.30:
                 st.success(
-                    f"EMI of {_fmt_currency(emi, cs)} is **{emi_to_income * 100:.1f}%** of monthly net income "
-                    f"({_fmt_currency(monthly_net, cs)}). Remaining after EMI: {_fmt_currency(remaining, cs)}. "
-                    f"Within the 40% FOIR threshold."
+                    f"EMI of {_fmt_currency(emi, cs)} is **{pct}** of monthly net income "
+                    f"({_fmt_currency(monthly_net, cs)}). Rating: **Comfortable**. "
+                    f"Remaining: {_fmt_currency(remaining, cs)}."
+                )
+            elif emi_to_income <= 0.45:
+                st.warning(
+                    f"EMI of {_fmt_currency(emi, cs)} is **{pct}** of monthly net income. "
+                    f"Rating: **Manageable**. Remaining: {_fmt_currency(remaining, cs)}."
                 )
             elif emi_to_income <= 0.55:
                 st.warning(
-                    f"EMI of {_fmt_currency(emi, cs)} is **{emi_to_income * 100:.1f}%** of monthly net income. "
-                    f"Remaining: {_fmt_currency(remaining, cs)}. Borderline — exceeds 40% FOIR but below 55%."
+                    f"EMI of {_fmt_currency(emi, cs)} is **{pct}** of monthly net income. "
+                    f"Rating: **Stretched**. Limited buffer — consider longer tenure or reduced amount."
                 )
             else:
                 st.error(
-                    f"EMI of {_fmt_currency(emi, cs)} is **{emi_to_income * 100:.1f}%** of monthly net income. "
-                    f"Remaining: {_fmt_currency(remaining, cs)}. Exceeds affordable threshold."
+                    f"EMI of {_fmt_currency(emi, cs)} is **{pct}** of monthly net income. "
+                    f"Rating: **Exceeds Limit**. Remaining: {_fmt_currency(remaining, cs)}."
                 )
 
     # Eligibility commentary
     if commentary:
         st.markdown("### Eligibility Commentary")
         st.markdown(f"> {commentary}")
+
+
+# ---------------------------------------------------------------------------
+# Tab 1, Enhancement 1: Authenticity score card
+# ---------------------------------------------------------------------------
+def render_authenticity_card(authenticity: dict):
+    """Collapsed expander showing authenticity score + expandable flag breakdown."""
+    if not authenticity:
+        return
+
+    score = authenticity.get("score", 0)
+    label = authenticity.get("label", "Unknown")
+    flags = authenticity.get("flags", [])
+
+    if score >= 80:
+        colour, icon = "green", "🟢"
+    elif score >= 50:
+        colour, icon = "orange", "🟡"
+    else:
+        colour, icon = "red", "🔴"
+
+    with st.expander(f"{icon} Authenticity Score: **{score}/100** ({label})", expanded=False):
+        for flag in flags:
+            passed = flag.get("pass")
+            if passed is True:
+                st.markdown(f"✅ **{flag['check'].replace('_', ' ').title()}**: {flag['message']}")
+            elif passed is False:
+                st.markdown(f"❌ **{flag['check'].replace('_', ' ').title()}**: {flag['message']}")
+            # Skip items with pass=None (insufficient data)
+
+
+# ---------------------------------------------------------------------------
+# Tab 1, Enhancement 4: Tax compliance verification
+# ---------------------------------------------------------------------------
+def render_tax_compliance(tax_compliance: dict, currency_symbol: str = "₹"):
+    """Show expected TDS range vs actual with slab breakdown."""
+    if not tax_compliance:
+        return
+
+    cs = currency_symbol
+    verdict = tax_compliance.get("verdict", "unknown")
+
+    if verdict == "consistent":
+        st.success(tax_compliance["verdict_detail"])
+    elif verdict == "below_expected":
+        st.warning(tax_compliance["verdict_detail"])
+    else:
+        st.warning(tax_compliance["verdict_detail"])
+
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Annualised Gross", _fmt_currency(tax_compliance.get("annual_gross"), cs))
+    with col2:
+        rng = tax_compliance.get("expected_tds_range", {})
+        low, high = rng.get("low", 0), rng.get("high", 0)
+        if low == high:
+            st.metric("Expected Annual TDS", _fmt_currency(high, cs))
+        else:
+            st.metric("Expected Annual TDS", f"{_fmt_currency(low, cs)} – {_fmt_currency(high, cs)}")
+    with col3:
+        st.metric("Actual Annual TDS", _fmt_currency(tax_compliance.get("actual_annual_tds"), cs))
+
+    # Computation breakdown
+    with st.expander("Tax Computation Details", expanded=False):
+        rows = [
+            ("Annualised gross salary", _fmt_currency(tax_compliance.get("annual_gross"), cs)),
+            ("Less: Standard deduction", f"({_fmt_currency(tax_compliance.get('standard_deduction'), cs)})"),
+        ]
+        hra_exempt = tax_compliance.get("hra_exemption_estimate", 0)
+        if hra_exempt > 0:
+            rows.append(("Less: Est. HRA exemption", f"({_fmt_currency(hra_exempt, cs)})"))
+        rows.append(("Estimated taxable income",
+                      _fmt_currency(tax_compliance.get("taxable_income_without_hra"), cs)))
+
+        for label, val in rows:
+            st.markdown(f"- **{label}:** {val}")
+
+        # Slab breakdown table
+        slabs = tax_compliance.get("slab_breakdown", [])
+        if slabs:
+            st.markdown("**Tax slab breakdown (New Regime FY 2024-25):**")
+            slab_rows = []
+            for s in slabs:
+                slab_rows.append({
+                    "Slab": s["slab"],
+                    "Rate": s["rate"],
+                    "Taxable": _fmt_currency(s["taxable_in_slab"], cs),
+                    "Tax": _fmt_currency(s["tax_on_slab"], cs),
+                })
+            st.dataframe(pd.DataFrame(slab_rows), use_container_width=True, hide_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Tab 1, Enhancement 5: Employer compliance signals
+# ---------------------------------------------------------------------------
+def render_employer_signals(employer_signals: dict):
+    """Card showing employer compliance signals derived from payslip data."""
+    if not employer_signals:
+        return
+
+    signals = employer_signals.get("signals", [])
+    pos = employer_signals.get("positive_count", 0)
+    total = employer_signals.get("total_assessable", 0)
+
+    st.caption(f"{pos} of {total} assessable signals positive")
+
+    for sig in signals:
+        cat = sig.get("category", "")
+        if sig.get("present") is True:
+            icon = "✅"
+        elif sig.get("present") is False:
+            icon = "❌" if cat == "missing" else "ℹ️"
+        else:
+            icon = "ℹ️"
+        st.markdown(f"{icon} **{sig['label']}** — {sig['detail']}")
+
+
+# ---------------------------------------------------------------------------
+# Tab 2, Enhancement 3: Income trend projection
+# ---------------------------------------------------------------------------
+def render_income_projection(projection: dict, currency_symbol: str = "₹"):
+    """Show trajectory label, growth rate, projected income at 12 months."""
+    if not projection:
+        return
+
+    cs = currency_symbol
+    trajectory = projection.get("trajectory", "Flat")
+    growth_pct = projection.get("monthly_growth_pct", 0)
+    current_net = projection.get("current_net", 0)
+    projected_12m = projection.get("projected_net_12m", 0)
+
+    arrows = {"Positive": "↑", "Flat": "→", "Declining": "↓"}
+    arrow = arrows.get(trajectory, "→")
+
+    if trajectory == "Positive":
+        st.success(f"**Income Trajectory: {trajectory} {arrow}**")
+    elif trajectory == "Declining":
+        st.error(f"**Income Trajectory: {trajectory} {arrow}**")
+    else:
+        st.info(f"**Income Trajectory: {trajectory} {arrow}**")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Growth Rate", f"{growth_pct * 100:.1f}%/month")
+    with col2:
+        st.metric("Current Net", _fmt_currency(current_net, cs))
+    with col3:
+        change_pct = ((projected_12m - current_net) / current_net * 100) if current_net > 0 else 0
+        st.metric("Projected Net (12m)", _fmt_currency(projected_12m, cs),
+                   delta=f"{change_pct:+.1f}%")
+
+    if trajectory == "Flat":
+        st.caption("Salary has remained consistent — projections are not meaningful for flat income profiles.")
+    elif trajectory == "Declining":
+        st.caption("Declining income during loan tenure increases repayment risk — warrants review.")
 
 
 # ---------------------------------------------------------------------------
